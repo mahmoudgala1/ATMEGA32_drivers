@@ -1,5 +1,5 @@
 /*
- *<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<    ADC_program.h    >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+ *<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<    ADC_program.c    >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
  *
  *  Author : Mahmoud Galal Elgendy
  *  Layer  : MCAL
@@ -12,6 +12,14 @@
 #include "../../LIB/BIT_MATH.h"
 
 static u8 ADC_u8State = IDLE;
+
+static u16 *ADC_pu16AsynchConversionResult = NULL;
+static void (*ADC_pvNotificationFunc)(void) = NULL;
+
+static u8 ADC_u8ISRState;
+static u8 *ADC_pu8ChainChannel;
+static u8 ADC_u8ChainSize;
+static u8 ADC_u8Index;
 
 void ADC_voidInit(void)
 {
@@ -70,6 +78,57 @@ u8 ADC_u8GetResultSync(u8 Copy_u8Channel, u16 *Copy_pu16Result)
 
 u8 ADC_u8StartConversionAsynch(u8 Copy_u8Channel, u16 *Copy_pu16Reading, void (*Copy_pvNotificationFunc)(void))
 {
+    u8 Local_u8ErrorState = OK;
+    if ((NULL != Copy_pu16Reading) && (NULL != Copy_pvNotificationFunc))
+    {
+        if (ADC_u8State == IDLE)
+        {
+            ADC_u8State = BUSY;
+            ADC_u8ISRState = SINGLE_CHANNEL_ASYNCH;
+            ADC_u8SetChannel(ADC_CHANNEL);
+            ADC_pu16AsynchConversionResult = Copy_pu16Reading;
+            ADC_pvNotificationFunc = Copy_pvNotificationFunc;
+            SET_BIT(ADCSRA, ADSC);
+        }
+        else
+        {
+            Local_u8ErrorState = BUSY_STATE;
+        }
+    }
+    else
+    {
+        Local_u8ErrorState = NULL_POINTER;
+    }
+    return Local_u8ErrorState;
+}
+
+u8 ADC_u8StartChainAsynch(Chain_t *Copy_Chain)
+{
+    u8 Local_u8ErrorState = OK;
+    if ((Copy_Chain != NULL) && (Copy_Chain->Channel != NULL) && (Copy_Chain->NotificationFunc != NULL) && (Copy_Chain->Result != NULL))
+    {
+        if (ADC_u8State == IDLE)
+        {
+            ADC_u8State = BUSY;
+            ADC_u8ISRState = CHAIN_CHANNEL_ASYNCH;
+            ADC_pu8ChainChannel = Copy_Chain->Channel;
+            ADC_u8ChainSize = Copy_Chain->Size;
+            ADC_pvNotificationFunc = Copy_Chain->NotificationFunc;
+            ADC_pu16AsynchConversionResult = Copy_Chain->Result;
+            ADC_u8Index = 0;
+            ADC_u8SetChannel(ADC_pu8ChainChannel[ADC_u8Index]);
+            SET_BIT(ADCSRA, ADSC);
+        }
+        else
+        {
+            Local_u8ErrorState = BUSY_STATE;
+        }
+    }
+    else
+    {
+        Local_u8ErrorState = NULL;
+    }
+    return Local_u8ErrorState;
 }
 
 void ADC_voidEnable(void)
@@ -165,4 +224,30 @@ u16 ADC_u16GetResult(u8 Copy_u8AdjustResult)
         break;
     }
     return Local_u16Result;
+}
+
+void __vector_16(void) __attribute((signal));
+void __vector_16(void)
+{
+    if (ADC_u8ISRState == SINGLE_CHANNEL_ASYNCH)
+    {
+        *ADC_pu16AsynchConversionResult = ADC_u16GetResult(ADC_Adjust_Result);
+        ADC_u8State = IDLE;
+        ADC_pvNotificationFunc();
+    }
+    else
+    {
+        *(ADC_pu16AsynchConversionResult + ADC_u8Index) = ADC_u16GetResult(ADC_Adjust_Result);
+        ADC_u8Index++;
+        if (ADC_u8Index == ADC_u8ChainSize)
+        {
+            ADC_u8State = IDLE;
+            ADC_pvNotificationFunc();
+        }
+        else
+        {
+            ADC_u8SetChannel(ADC_pu8ChainChannel[ADC_u8Index]);
+            SET_BIT(ADCSRA, ADSC);
+        }
+    }
 }
